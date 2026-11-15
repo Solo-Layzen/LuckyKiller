@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Rapports / logs générés par l'outil
+*.log
+scan_report*.txt
+scan_report*.json
+
+# Visual Studio (fichiers générés, jamais à committer)
+.vs/
+*.suo
+*.user
+*.VC.db
+
+# Éditeurs
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
