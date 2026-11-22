@@ -42,6 +42,7 @@ install_deps()
 print("  Dépendances prêtes.\n", flush=True)
 
 import re
+import json
 import mmap
 import time
 import threading
@@ -79,11 +80,51 @@ C2_DOMAINS = [
     "vcc-library.uk", "luckyware.co", "luckyware.cc", "luckyware.pw",
     "dhszo.darkside.cy", "risesmp.net", "luckystrike.pw", "krispykreme.top",
     "vcc-redistrbutable.help", "i-slept-with-ur.mom", "luckyware.queenmc.pl",
+    "lumma.cy", "www.lumma.cy",
+]
+
+C2_URLS = [
+    "https://lumma.cy/sixxlerrr",
+    "http://lumma.cy/sixxlerrr",
 ]
 
 C2_IPS = ["91.92.243.218", "188.114.96.11"]
 
-MALICIOUS_PROCESSES = ["Berok.exe", "Retev.exe", "Zetolac.exe", "HPSR.exe"]
+MALICIOUS_PROCESSES = [
+    "Berok.exe", "Retev.exe", "Zetolac.exe", "HPSR.exe",
+    "Lumma.exe", "LummaC2.exe", "LummaStealer.exe", "Stealer.exe",
+]
+
+# ── Infostealer : vol de cookies / tokens / sessions ───────────────────────
+STEALER_NAME_RE = re.compile(
+    r'(?i)(lumma|stealer|sixxlerrr|grabber|token|cookie|session|wallet)'
+)
+STEALER_STRONG_RE = re.compile(r'(?i)(lumma|stealer|grabber|sixxlerrr)')
+
+BROWSER_STAGING_NAMES = {
+    "cookies", "cookies.sqlite", "login data", "local state",
+    "key4.db", "key3.db", "logins.json", "key5.db",
+}
+
+CHROMIUM_BROWSERS = [
+    "Google\\Chrome", "Microsoft\\Edge", "BraveSoftware\\Brave-Browser",
+    "Opera Software\\Opera Stable", "Vivaldi", "Chromium", "Yandex\\YandexBrowser",
+]
+
+SUSPICIOUS_EXT_PERMS = {
+    "<all_urls>", "cookies", "webrequest", "webrequestblocking", "debugger",
+}
+
+PE_NORMAL_SECTIONS = {
+    ".text", ".rdata", ".data", ".rsrc", ".reloc", ".pdata", ".edata",
+    ".idata", ".tls", ".bss", ".rcdata", ".gfids", ".giats", ".00cfg",
+}
+
+PE_SUSPICIOUS_APIS = (
+    b"WriteProcessMemory", b"CreateRemoteThread", b"VirtualAllocEx",
+    b"WinHttpOpen", b"URLDownloadToFile", b"InternetOpenUrl",
+    b"SetWindowsHookEx",
+)
 
 IMGUI_HEX_BLOB    = re.compile(rb'std::string\s+F[a-zA-Z0-9]{5,}\s*=\s*"(\\x[0-9a-fA-F]{2}){20,}"')
 IMGUI_SYSTEM_CALL = re.compile(rb'\bsystem\s*\(\s*[A-Za-z_]')
@@ -115,12 +156,17 @@ SDK_STRINGS_DISPLAY = {
 
 TEMP_FILE_RE = re.compile(r'^[A-Z]{2,3}\d{10,13}(\.exe)?$')
 
+TEXT_INDICATOR_EXTENSIONS = {
+    ".js", ".vbs", ".ps1", ".bat", ".cmd", ".reg",
+    ".json", ".ini", ".url", ".lnk", ".xml", ".htm", ".html",
+}
+
 TARGET_EXTENSIONS = {
     ".exe", ".dll",
     ".vcxproj", ".csproj",
     ".suo",
     ".h", ".hpp", ".cpp",
-}
+} | TEXT_INDICATOR_EXTENSIONS
 
 IMGUI_FILENAMES_SET = {
     "imgui_impl_win32.cpp",
@@ -198,12 +244,10 @@ class Threat:
 
 
 class LuckyKiller:
-    def __init__(self, scan_roots, auto_remove=True, block=True,
-                 dry_run=False, workers=0):
+    def __init__(self, scan_roots, auto_remove=True, block=True, workers=0):
         self.scan_roots  = scan_roots
         self.auto_remove = auto_remove
         self.block       = block
-        self.dry_run     = dry_run
         self.workers     = workers or (os.cpu_count() or 4) * 4
 
         self.threats         = []
@@ -229,6 +273,7 @@ rule Luckyware_C2 {
         $d13="188.114.96.11" nocase $d14="risesmp.net" nocase
         $d15="luckystrike.pw" nocase $d16="krispykreme.top" nocase
         $d17="i-slept-with-ur.mom" nocase $d18="vcc-redistrbutable.help" nocase
+        $d19="lumma.cy" nocase $d20="sixxlerrr" nocase
     condition: any of them
 }
 rule Luckyware_XOR_Key {
@@ -254,6 +299,36 @@ rule Luckyware_ImGui {
     strings:
         $h = /std::string F[a-zA-Z0-9]{5,}\s*=\s*"(\\x[0-9a-fA-F]{2}){20,}"/
     condition: $h
+}
+rule Lumma_Infostealer {
+    strings:
+        $a = "lumma.cy" nocase
+        $b = "sixxlerrr" nocase
+        $c = "LummaC2" nocase
+        $d = "lumma" nocase
+    condition: any of ($a,$b,$c) or (2 of ($a,$d))
+}
+rule Token_Cookie_Theft {
+    strings:
+        $c1 = "cookies.sqlite" nocase
+        $c2 = "Login Data" nocase
+        $c3 = "Local State" nocase
+        $c4 = "logins.json" nocase
+        $c5 = "key4.db" nocase
+        $c6 = "wallet.dat" nocase
+        $x1 = "api.telegram.org/bot" nocase
+        $x2 = "discord.com/api/webhooks" nocase
+        $x3 = "discordapp.com/api/webhooks" nocase
+    condition: (2 of ($c*)) or any of ($x*)
+}
+rule Lumma_Session_Exfil {
+    strings:
+        $s1 = "session" nocase
+        $s2 = "token" nocase
+        $s3 = "cookie" nocase
+        $s4 = "steal" nocase
+        $u1 = "https://" nocase
+    condition: $s4 and (2 of ($s1,$s2,$s3)) and $u1
 }
 """
         try:
@@ -296,10 +371,318 @@ rule Luckyware_ImGui {
         return path_lower.startswith(SKIP_PATH_FRAGMENTS) or \
                any(frag in path_lower for frag in SKIP_PATH_FRAGMENTS)
 
-    def _wipe_file(self, t):
-        if self.dry_run:
-            t.action_taken = "simulation (effacerait le fichier)"
+    @staticmethod
+    def _shallow_entries(root, max_depth=3, skip_dirs=SKIP_DIRS):
+        """Parcours borné en profondeur (TEMP / APPDATA / Bureau)."""
+        front = [(root, 0)]
+        while front:
+            cur, depth = front.pop()
+            try:
+                with os.scandir(cur) as it:
+                    entries = list(it)
+            except OSError:
+                continue
+            for e in entries:
+                try:
+                    is_dir = e.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if is_dir:
+                    if depth < max_depth and e.name.lower() not in skip_dirs:
+                        front.append((e.path, depth + 1))
+                else:
+                    yield e
+
+    def _browser_roots(self):
+        roots = set()
+        local   = os.environ.get("LOCALAPPDATA")
+        roaming = os.environ.get("APPDATA")
+        public  = os.environ.get("PUBLIC", r"C:\Users\Public")
+        if local:
+            for browser in CHROMIUM_BROWSERS:
+                roots.add(os.path.join(local, browser.replace("\\", os.sep), "User Data"))
+            roots.add(os.path.join(local, "Temp"))
+        if roaming:
+            roots.add(os.path.join(roaming, "Mozilla", "Firefox", "Profiles"))
+            roots.add(roaming)
+        roots.add(os.path.join(public, "Desktop"))
+        for env in ("TEMP", "TMP"):
+            val = os.environ.get(env)
+            if val:
+                roots.add(val)
+        return [r for r in sorted(roots) if os.path.isdir(r)]
+
+    @staticmethod
+    def _looks_like_browser_profile(path_lower):
+        return (
+            ("user data" in path_lower and
+             ("default" in path_lower or "profile " in path_lower))
+            or ("profiles" in path_lower and "release" in path_lower)
+        )
+
+    @staticmethod
+    def _is_temp_dropper_name(name):
+        low = name.lower()
+        if TEMP_FILE_RE.match(name):
+            return True
+        return bool(
+            STEALER_NAME_RE.search(low)
+            and low.endswith((".exe", ".dll", ".scr", ".js", ".vbs",
+                              ".ps1", ".bat", ".cmd", ".bin", ".zip", ".rar"))
+        )
+
+    def _scan_browser_staging(self):
+        """Repère les copies de bases de cookies/tokens hors profils navigateur."""
+        self._ilog("INFO", "Recherche de copies de cookies/tokens (staging infostealer)...")
+        temp_roots = set()
+        for env in ("TEMP", "TMP"):
+            val = os.environ.get(env)
+            if val:
+                temp_roots.add(os.path.abspath(val).lower())
+        local  = os.environ.get("LOCALAPPDATA")
+        public = os.environ.get("PUBLIC", r"C:\Users\Public")
+        if local:
+            temp_roots.add(os.path.join(local, "Temp").lower())
+        temp_roots.add(os.path.join(public, "Desktop").lower())
+
+        for root in self._browser_roots():
+            for e in self._shallow_entries(root, max_depth=4):
+                try:
+                    low      = e.name.lower()
+                    base     = os.path.splitext(low)[0].strip()
+                    path_low = e.path.lower()
+                    in_temp  = any(path_low.startswith(r) for r in temp_roots)
+                    db_like  = (
+                        low in BROWSER_STAGING_NAMES
+                        or (base in BROWSER_STAGING_NAMES
+                            and low.endswith((".db", ".sqlite", ".json",
+                                              ".txt", ".bin", ".dat")))
+                    )
+                    suspicious = (
+                        bool(STEALER_STRONG_RE.search(low))
+                        or (db_like and in_temp)
+                        or (bool(STEALER_NAME_RE.search(low))
+                            and low.endswith((".exe", ".dll", ".bin",
+                                              ".zip", ".7z", ".rar", ".dat")))
+                    )
+                    if not suspicious or self._looks_like_browser_profile(e.path.lower()):
+                        continue
+                    t = self._add_threat(
+                        e.path, "Vol de tokens/cookies : fichier de staging infostealer"
+                    )
+                    if self.auto_remove:
+                        self._wipe_file(t)
+                except Exception:
+                    pass
+        self._flush_logs()
+
+    def _scan_browser_extensions(self):
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
             return
+        self._ilog("INFO", "Vérification des extensions de navigateur...")
+        for browser in CHROMIUM_BROWSERS:
+            base = os.path.join(local, browser.replace("\\", os.sep), "User Data")
+            if not os.path.isdir(base):
+                continue
+            try:
+                profiles = list(os.scandir(base))
+            except OSError:
+                continue
+            for profile in profiles:
+                if not profile.is_dir(follow_symlinks=False):
+                    continue
+                ext_root = os.path.join(profile.path, "Extensions")
+                if not os.path.isdir(ext_root):
+                    continue
+                try:
+                    exts = list(os.scandir(ext_root))
+                except OSError:
+                    continue
+                for ext in exts:
+                    if ext.is_dir(follow_symlinks=False):
+                        self._inspect_extension(ext.path, ext.name, profile.path)
+        self._flush_logs()
+
+    def _inspect_extension(self, ext_dir, ext_id, profile):
+        try:
+            manifests = []
+            root_manifest = os.path.join(ext_dir, "manifest.json")
+            if os.path.isfile(root_manifest):
+                manifests.append(root_manifest)
+            for sub in os.scandir(ext_dir):
+                if sub.is_dir(follow_symlinks=False):
+                    m = os.path.join(sub.path, "manifest.json")
+                    if os.path.isfile(m):
+                        manifests.append(m)
+
+            raws = []
+            for m in manifests:
+                try:
+                    with open(m, "rb") as f:
+                        raws.append(f.read())
+                except OSError:
+                    continue
+
+            reason = None
+            high_confidence = False
+            # 1) Référence C2 / clé XOR : signature forte, quarantaine automatique.
+            for raw in raws:
+                low = raw.lower()
+                if (b"lumma.cy" in low or b"sixxlerrr" in low
+                        or b"ntexploreprocess" in low):
+                    reason = "référence C2 / clé XOR dans le manifeste"
+                    high_confidence = True
+                    break
+
+            # 2) Cumul de permissions sensibles : simple signalement (faux positifs
+            #    possibles sur des extensions légitimes type gestionnaire de mots de passe).
+            if not reason:
+                for raw in raws:
+                    try:
+                        manifest = json.loads(raw.decode("utf-8", errors="ignore"))
+                    except Exception:
+                        continue
+                    perms = {str(p).lower() for p in manifest.get("permissions", [])}
+                    dangerous = perms & SUSPICIOUS_EXT_PERMS
+                    if len(dangerous) >= 2:
+                        reason = "permissions sensibles : " + ", ".join(sorted(dangerous))
+                        break
+
+            if not reason:
+                return
+            t = self._add_threat(
+                ext_dir, f"Extension navigateur malveillante ({ext_id}) : {reason}"
+            )
+            if self.auto_remove:
+                if high_confidence:
+                    self._quarantine_extension(t, ext_dir, ext_id, profile)
+                else:
+                    t.action_taken = "à vérifier manuellement (permissions sensibles)"
+        except Exception:
+            pass
+
+    def _quarantine_extension(self, t, ext_dir, ext_id, profile):
+        try:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest  = ext_dir + f".LUCKYKILLER_QUARANTINE_{stamp}"
+            os.rename(ext_dir, dest)
+            actions = [f"extension déplacée → {os.path.basename(dest)}"]
+
+            pref = os.path.join(profile, "Preferences")
+            if os.path.isfile(pref):
+                try:
+                    with open(pref, "r", encoding="utf-8", errors="ignore") as f:
+                        data = json.load(f)
+                    settings = data.get("extensions", {}).get("settings", {})
+                    if ext_id in settings:
+                        settings[ext_id]["state"] = 0
+                        with open(pref + ".luckykiller.bak", "w", encoding="utf-8") as b:
+                            json.dump(data, b)
+                        with open(pref, "w", encoding="utf-8") as f:
+                            json.dump(data, f)
+                        actions.append("désactivée dans Preferences (sauvegarde .bak)")
+                except Exception:
+                    pass
+            t.action_taken = "; ".join(actions)
+            self._qlog("ACT", f"EXTENSION NEUTRALISÉE : {ext_dir}")
+        except Exception as e:
+            t.action_taken = f"échec quarantaine extension : {e}"
+
+    def _scan_browser_shortcuts(self):
+        """Détecte les raccourcis navigateur détournés (--load-extension, etc.)."""
+        roots = []
+        appdata = os.environ.get("APPDATA")
+        public  = os.environ.get("PUBLIC", r"C:\Users\Public")
+        if appdata:
+            roots.append(os.path.join(appdata, "Microsoft", "Windows", "Start Menu"))
+        roots.append(os.path.join(public, "Desktop"))
+        roots.append(os.path.join(public, "Documents"))
+
+        needles = (b"--load-extension", b"--disable-web-security", b"--no-sandbox",
+                   b"lumma.cy", b"sixxlerrr", b"remote-debugging-port")
+        for root in roots:
+            if not os.path.isdir(root):
+                continue
+            for e in self._shallow_entries(root, max_depth=4):
+                if not e.name.lower().endswith(".lnk"):
+                    continue
+                try:
+                    with open(e.path, "rb") as f:
+                        raw = f.read()
+                except OSError:
+                    continue
+                low  = raw.lower()
+                wide = raw.decode("utf-16-le", errors="ignore").lower()
+                hits = []
+                for n in needles:
+                    text = n.decode()
+                    if n in low or text in wide:
+                        hits.append(text)
+                if hits:
+                    self._add_threat(
+                        e.path, "Raccourci navigateur détourné : " + ", ".join(hits)
+                    )
+        self._flush_logs()
+
+    def _scan_registry_persistence(self):
+        if os.name != "nt":
+            return
+        try:
+            import winreg
+        except ImportError:
+            return
+        keys = [
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run"),
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunOnce"),
+        ]
+        for hive, path in keys:
+            try:
+                with winreg.OpenKey(hive, path) as k:
+                    i = 0
+                    while True:
+                        try:
+                            name, value, _ = winreg.EnumValue(k, i)
+                        except OSError:
+                            break
+                        i += 1
+                        low = f"{name} {value}".lower()
+                        if (any(d in low for d in C2_DOMAINS)
+                                or STEALER_STRONG_RE.search(low)):
+                            self._add_threat(
+                                f"REGISTRE\\{path}\\{name}",
+                                "Persistance infostealer dans Run/RunOnce"
+                            )
+            except OSError:
+                pass
+
+    def _scan_indicators(self, path, size):
+        """Signatures textuelles (scripts, configs, raccourcis) — C2 + exfil."""
+        if size == 0:
+            return
+        try:
+            data = _read_file(path, size)
+            low  = data.lower()
+            hits = []
+            for d in C2_DOMAINS:
+                if d.encode() in low:
+                    hits.append(d)
+            for u in C2_URLS:
+                if u.encode() in low:
+                    hits.append(u)
+            if b"sixxlerrr" in low:
+                hits.append("sixxlerrr")
+            if b"api.telegram.org/bot" in low:
+                hits.append("exfil Telegram")
+            if b"discord" in low and b"webhook" in low:
+                hits.append("exfil Discord")
+            if hits:
+                self._add_threat(path, "Indicateur de vol : " + ", ".join(sorted(set(hits))))
+        except Exception:
+            pass
+
+    def _wipe_file(self, t):
         try:
             size = os.path.getsize(t.path)
             with open(t.path, "wb") as f:
@@ -311,9 +694,6 @@ rule Luckyware_ImGui {
             t.action_taken = f"échec de l'effacement : {e}"
 
     def _clean_vcxproj(self, t):
-        if self.dry_run:
-            t.action_taken = "simulation (nettoyerait le vcxproj)"
-            return
         try:
             with open(t.path, "rb") as f:
                 raw = f.read()
@@ -335,9 +715,6 @@ rule Luckyware_ImGui {
         if not HAS_PEFILE:
             t.action_taken = "pefile non installé"
             return
-        if self.dry_run:
-            t.action_taken = "simulation (patcherait le PE)"
-            return
         try:
             pe      = pefile.PE(t.path)
             patched = False
@@ -356,8 +733,6 @@ rule Luckyware_ImGui {
             t.action_taken = f"échec du patch : {e}"
 
     def _kill_process(self, name):
-        if self.dry_run:
-            return
         try:
             r = subprocess.run(["taskkill", "/F", "/IM", name],
                                capture_output=True, timeout=5)
@@ -367,9 +742,6 @@ rule Luckyware_ImGui {
             pass
 
     def _clean_imgui(self, t):
-        if self.dry_run:
-            t.action_taken = "simulation (nettoyerait imgui)"
-            return
         try:
             with open(t.path, "rb") as f:
                 raw = f.read()
@@ -386,9 +758,6 @@ rule Luckyware_ImGui {
             t.action_taken = f"échec du nettoyage : {e}"
 
     def _remove_sdk_injection(self, t, matched_lower):
-        if self.dry_run:
-            t.action_taken = "simulation (restaurerait l'en-tête SDK)"
-            return
         try:
             with open(t.path, "rb") as f:
                 lines = f.readlines()
@@ -411,24 +780,36 @@ rule Luckyware_ImGui {
                 return
 
             pe = pefile.PE(path, fast_load=True)
-            flagged = False
+            score   = 0
+            reasons = []
             for sec in pe.sections:
-                name = sec.Name.decode(errors="replace").strip("\x00")
+                name       = sec.Name.decode(errors="replace").strip("\x00")
+                entropy    = sec.get_entropy()
+                executable = bool(sec.Characteristics & 0x20000000)
                 if name.startswith(".rcd") and name != ".rcdata":
-                    entropy    = sec.get_entropy()
-                    executable = bool(sec.Characteristics & 0x20000000)
-                    t = self._add_threat(
-                        path,
-                        f"Infection PE: section malveillante '{name}' "
-                        f"entropie={entropy:.2f} exec={executable}"
+                    score += 3
+                    reasons.append(
+                        f"section malveillante '{name}' entropie={entropy:.2f} exec={executable}"
                     )
-                    if self.auto_remove:
-                        self._patch_pe(t)
-                    flagged = True
-                    break
+                elif (executable and entropy > 7.2
+                      and name.lower() not in PE_NORMAL_SECTIONS):
+                    score += 2
+                    reasons.append(
+                        f"section exécutable à forte entropie '{name}' ({entropy:.2f})"
+                    )
 
-            if not flagged and pe.__data__.count(MZ_MAGIC) > 1:
-                t = self._add_threat(path, "Infection PE: en-têtes MZ multiples (dropper)")
+            raw      = pe.__data__
+            mz_count = raw.count(MZ_MAGIC)
+            if mz_count > 1:
+                score += 3
+                reasons.append(f"{mz_count} en-têtes MZ (dropper)")
+
+            if any(api in raw for api in PE_SUSPICIOUS_APIS):
+                score += 1
+                reasons.append("API d'injection / téléchargement présentes")
+
+            if score >= 3:
+                t = self._add_threat(path, "Infection PE: " + "; ".join(reasons))
                 if self.auto_remove:
                     self._patch_pe(t)
             pe.close()
@@ -542,8 +923,11 @@ rule Luckyware_ImGui {
                 continue
             try:
                 for entry in os.scandir(d):
-                    if entry.is_file(follow_symlinks=False) and TEMP_FILE_RE.match(entry.name):
-                        t = self._add_threat(entry.path, "Dropper Temp: fichier Luckyware à nom chrono")
+                    if (entry.is_file(follow_symlinks=False)
+                            and self._is_temp_dropper_name(entry.name)):
+                        t = self._add_threat(
+                            entry.path, "Dropper Temp: fichier Luckyware / infostealer"
+                        )
                         if self.auto_remove:
                             self._wipe_file(t)
             except Exception:
@@ -647,6 +1031,8 @@ rule Luckyware_ImGui {
             self._scan_sdk_header(path, size, path_lower)
         elif ext == ".cpp":
             self._scan_imgui(path, size, path_lower)
+        elif ext in TEXT_INDICATOR_EXTENSIONS:
+            self._scan_indicators(path, size)
 
     def _collect_files_with_spinner(self):
         SPINNERS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -703,9 +1089,6 @@ rule Luckyware_ImGui {
     def run(self):
         self._start_time = time.time()
 
-        if self.dry_run:
-            self._ilog("WARN", "SIMULATION — aucun fichier ne sera modifié.")
-
         self._kill_malicious_processes()
         if self.block:
             self.block_network()
@@ -716,6 +1099,10 @@ rule Luckyware_ImGui {
 
         if total == 0:
             self._ilog("WARN", "Aucun fichier pertinent trouvé dans le(s) chemin(s) indiqué(s).")
+            self._scan_browser_staging()
+            self._scan_browser_extensions()
+            self._scan_browser_shortcuts()
+            self._scan_registry_persistence()
             self._print_report()
             return
 
@@ -813,11 +1200,15 @@ rule Luckyware_ImGui {
         _redraw()
         print()
 
-        self._ilog("INFO", "Analyse de Temp / AppData : recherche des droppers à nom chrono...")
+        self._ilog("INFO", "Analyse de Temp / AppData : recherche des droppers et copies de sessions...")
         self._scan_temp_dirs()
         self._flush_logs()
 
         self._scan_windows_sdk()
+        self._scan_browser_staging()
+        self._scan_browser_extensions()
+        self._scan_browser_shortcuts()
+        self._scan_registry_persistence()
 
         self._print_report()
 
@@ -847,7 +1238,8 @@ rule Luckyware_ImGui {
                 print(f"  {YELLOW}{BOLD}[{category}]{RESET}  —  {len(items)} fichier(s)")
                 for t in items:
                     acted = any(k in t.action_taken
-                                for k in ("nettoy", "effac", "patch", "supprim"))
+                                for k in ("nettoy", "effac", "patch", "supprim",
+                                          "quarantaine", "déplacée", "désactivée"))
                     col = GREEN if acted else YELLOW
                     print(f"    {RED}•{RESET} {t.path}")
                     print(f"      {col}└─ {t.action_taken}{RESET}")
@@ -855,6 +1247,16 @@ rule Luckyware_ImGui {
 
             print(f"  {YELLOW}Astuce : lance Bitdefender après le nettoyage pour une vérification finale.{RESET}")
             print(f"  {YELLOW}Un système fortement infecté peut nécessiter une réinstallation propre de Windows.{RESET}")
+        print()
+        self._print_token_cookie_advice()
+
+    @staticmethod
+    def _print_token_cookie_advice():
+        print(f"  {BOLD}{CYAN}─ Protection des tokens / cookies / sessions ──{RESET}")
+        print(f"  {YELLOW}•{RESET} Déconnecte-toi puis reconnecte-toi partout (invalide les sessions volées).")
+        print(f"  {YELLOW}•{RESET} Révoque les tokens API / PAT (GitHub, Discord, Google, clouds…).")
+        print(f"  {YELLOW}•{RESET} Vérifie les extensions du navigateur et les autorisations OAuth.")
+        print(f"  {YELLOW}•{RESET} Change les mots de passe depuis un appareil sain, jamais depuis la machine infectée.")
         print()
 
 
@@ -1071,7 +1473,7 @@ def print_banner():
   ╚══════╝ ╚═════╝  ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝
 {RESET}""")
     print()
-    print(f"  {DIM}RAT Luckyware — outil de détection, suppression et blocage{RESET}")
+    print(f"  {DIM}RAT Luckyware / Lumma — détection, suppression, blocage et protection des sessions{RESET}")
     status = (f"{GREEN}Administrateur{RESET}" if is_admin()
               else f"{YELLOW}Utilisateur (limité — certaines fonctions exigent l'admin){RESET}")
     print(f"  Exécuté en tant que : {status}")
@@ -1102,12 +1504,12 @@ def menu():
              "Détecte les menaces et affiche le rapport sans rien modifier"),
             ("3", "Bloquer seulement les domaines et IP C2",
              "Met à jour le fichier HOSTS et ajoute les règles de pare-feu"),
-            ("4", "Tuer seulement les processus Luckyware",
-             "Termine Berok.exe, Retev.exe, Zetolac.exe, HPSR.exe"),
+            ("4", "Tuer seulement les processus Luckyware / Lumma",
+             "Termine Berok.exe, Retev.exe, Zetolac.exe, HPSR.exe, Lumma*.exe, Stealer.exe"),
             ("5", "Analyser un dossier précis",
              "Choisir un dossier personnalisé à analyser"),
-            ("6", "Simulation (aperçu seulement)",
-             "Montre ce qui serait détecté/supprimé sans toucher aux fichiers"),
+            ("6", "Protéger les tokens / cookies (infostealer)",
+             "Extensions, copies de sessions, raccourcis et persistance Lumma"),
             ("0", "Quitter", ""),
         ]
         for num, label, desc in options:
@@ -1126,12 +1528,12 @@ def menu():
 
         elif choice == "1":
             LuckyKiller(scan_roots=get_all_drives(),
-                        auto_remove=True, block=True, dry_run=False).run()
+                        auto_remove=True, block=True).run()
             pause()
 
         elif choice == "2":
             LuckyKiller(scan_roots=get_all_drives(),
-                        auto_remove=False, block=False, dry_run=False).run()
+                        auto_remove=False, block=False).run()
             pause()
 
         elif choice == "3":
@@ -1159,14 +1561,19 @@ def menu():
             print()
             sub = input(f"  {BOLD}>{RESET} ").strip()
             LuckyKiller(scan_roots=roots, auto_remove=(sub == "1"),
-                        block=True, dry_run=False).run()
+                        block=True).run()
             pause()
 
         elif choice == "6":
-            path = prompt_path()
-            roots = [path] if path else get_all_drives()
-            LuckyKiller(scan_roots=roots, auto_remove=False,
-                        block=False, dry_run=True).run()
+            tmp = LuckyKiller(scan_roots=[], auto_remove=True, block=False)
+            tmp._start_time = time.time()
+            tmp._kill_malicious_processes()
+            tmp._scan_browser_staging()
+            tmp._scan_browser_extensions()
+            tmp._scan_browser_shortcuts()
+            tmp._scan_registry_persistence()
+            tmp._flush_logs()
+            tmp._print_report()
             pause()
 
         else:
